@@ -1,0 +1,7 @@
+{
+  "name": "Villa Tao Balian",
+  "description": "An exclusive tropical villa retreat in Balian, West Bali, combining traditional architecture, natural materials, coastal privacy, and slow living.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
