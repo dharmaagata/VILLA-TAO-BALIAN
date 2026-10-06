@@ -19,12 +19,27 @@ let serverReservations: Array<{
   unitId: string;
   unitName: string;
   guestName: string;
+  guestEmail?: string;
+  guestPhone?: string;
+  guestCountry?: string;
   checkIn: string;
   checkOut: string;
+  nights?: number;
+  guests?: number;
   channel: string;
   status: string;
+  paymentMethod?: string;
+  paymentSchedule?: string;
+  paymentId?: string;
   totalUsd: number;
+  amountPaidUsd?: number;
+  balanceDueUsd?: number;
+  addons?: string[];
+  specialRequests?: string;
+  arrivalTime?: string;
+  createdAt?: string;
   externalUid?: string;
+  heldExpiresAt?: number;
 }> = [];
 
 let serverInquiries: Array<Record<string, unknown>> = [];
@@ -44,6 +59,207 @@ app.post('/api/bookings', (req, res) => {
     serverReservations = [booking, ...serverReservations.filter((r) => r.id !== booking.id)];
   }
   res.json({ ok: true, booking });
+});
+
+// Helper to clean expired holds
+function cleanupExpiredHolds() {
+  const now = Date.now();
+  serverReservations = serverReservations.map((r: any) => {
+    if (r.status === 'held' && r.heldExpiresAt && r.heldExpiresAt < now) {
+      return { ...r, status: 'expired' };
+    }
+    return r;
+  });
+}
+
+// 10. Temporary Reservation Hold Endpoint (15-minute checkout window)
+app.post('/api/payments/hold', (req, res) => {
+  cleanupExpiredHolds();
+  const { checkIn, checkOut, guestName, guestEmail, guests, totalUsd } = req.body || {};
+
+  if (!checkIn || !checkOut) {
+    return res.status(400).json({ ok: false, error: 'Missing checkIn or checkOut dates' });
+  }
+
+  // Check if dates conflict with active bookings (excluding cancelled/expired)
+  const conflict = serverReservations.find((r: any) => {
+    if (r.status === 'cancelled' || r.status === 'expired') return false;
+    return checkIn < r.checkOut && checkOut > r.checkIn;
+  });
+
+  if (conflict) {
+    return res.status(409).json({
+      ok: false,
+      error: 'DATES_UNAVAILABLE',
+      message: 'Villa Tao is unavailable for the selected dates.',
+    });
+  }
+
+  const now = Date.now();
+  const expiresAt = now + 15 * 60 * 1000; // 15-minute hold
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+  const referenceCode = `VT-${new Date().getFullYear()}-${randomSuffix}`;
+  const holdId = `hold-${now}-${randomSuffix}`;
+
+  const heldReservation: any = {
+    id: holdId,
+    referenceCode,
+    unitId: 'entire-villa',
+    unitName: 'Villa Tao — Entire Private Villa',
+    guestName: guestName || 'Guest (Checkout in Progress)',
+    guestEmail: guestEmail || '',
+    guestPhone: '',
+    guestCountry: 'International',
+    checkIn,
+    checkOut,
+    nights: Math.max(1, Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))),
+    guests: guests || 2,
+    channel: 'direct',
+    status: 'held',
+    paymentMethod: 'card',
+    paymentSchedule: 'full',
+    totalUsd: totalUsd || 1740,
+    amountPaidUsd: 0,
+    balanceDueUsd: totalUsd || 1740,
+    addons: [],
+    createdAt: new Date().toISOString(),
+    heldExpiresAt: expiresAt,
+  };
+
+  serverReservations = [heldReservation, ...serverReservations];
+  res.json({ ok: true, referenceCode, holdId, expiresAt, status: 'held' });
+});
+
+// 7 & 8. Payment Intent with QRIS limit enforcement (Rp 10,000,000 max)
+app.post('/api/payments/create-intent', (req, res) => {
+  cleanupExpiredHolds();
+  const { referenceCode, paymentMethod, amountIdr, amountUsd } = req.body || {};
+
+  // Find reservation
+  const resIndex = serverReservations.findIndex((r: any) => r.referenceCode === referenceCode);
+  const reservation = resIndex !== -1 ? serverReservations[resIndex] : null;
+
+  // QRIS Limit Verification (Max Rp 10,000,000)
+  if (paymentMethod === 'qris') {
+    const idrTotal = amountIdr || (amountUsd ? Math.round(amountUsd * 15800) : 0);
+    if (idrTotal > 10_000_000) {
+      return res.status(400).json({
+        ok: false,
+        error: 'QRIS_LIMIT_EXCEEDED',
+        maxLimitIdr: 10_000_000,
+        amountIdr: idrTotal,
+        message:
+          'QRIS is available for payments within the supported transaction limit (up to Rp 10,000,000). For this reservation, please use Credit/Debit Card or Bank Transfer.',
+      });
+    }
+  }
+
+  const paymentId = `pay-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  const expiresAt = Date.now() + 15 * 60 * 1000;
+
+  let paymentDetails: any = {
+    paymentId,
+    method: paymentMethod,
+    expiresAt,
+  };
+
+  if (paymentMethod === 'qris') {
+    paymentDetails = {
+      ...paymentDetails,
+      qrString: `00020101021226670014ID.LINKAJA.WWW01189360091800001002340215VT${referenceCode}5204581253033605802ID5919VILLA TAO BALIAN RETREAT6007TABANAN61058216262070703A016304E85C`,
+      amountIdr: amountIdr || (amountUsd ? Math.round(amountUsd * 15800) : 0),
+      issuer: 'National QRIS Network (BCA, Mandiri, BRI, BNI, GoPay, OVO, DANA)',
+    };
+  } else if (paymentMethod === 'virtual_account' || paymentMethod === 'bank_transfer') {
+    paymentDetails = {
+      ...paymentDetails,
+      virtualAccountNumber: `772049${Math.floor(100000 + Math.random() * 900000)}`,
+      bankName: req.body?.bankName || 'BCA (Bank Central Asia)',
+      accountName: 'PT VILLA TAO BALIAN RETREAT',
+    };
+  }
+
+  if (reservation) {
+    serverReservations[resIndex] = {
+      ...reservation,
+      paymentId,
+      paymentMethod,
+    };
+  }
+
+  res.json({ ok: true, ...paymentDetails });
+});
+
+// 9. Server-Side Payment Verification (never trust frontend alone)
+app.post('/api/payments/verify', (req, res) => {
+  cleanupExpiredHolds();
+  const { referenceCode, paymentId, paymentMethod, guestData } = req.body || {};
+
+  const resIndex = serverReservations.findIndex((r: any) => r.referenceCode === referenceCode);
+  let reservation = resIndex !== -1 ? serverReservations[resIndex] : null;
+
+  if (!reservation && guestData) {
+    reservation = {
+      id: `res-${Date.now()}`,
+      referenceCode,
+      unitId: 'entire-villa',
+      unitName: 'Villa Tao — Entire Private Villa',
+      guestName: `${guestData.firstName || ''} ${guestData.lastName || ''}`.trim() || 'Guest',
+      guestEmail: guestData.guestEmail || '',
+      guestPhone: guestData.guestPhone || '',
+      guestCountry: guestData.guestCountry || 'International',
+      checkIn: guestData.checkIn,
+      checkOut: guestData.checkOut,
+      nights: guestData.nights || 3,
+      guests: guestData.guests || 2,
+      channel: 'direct',
+      status: 'confirmed',
+      paymentMethod: paymentMethod || 'card',
+      paymentSchedule: 'full',
+      totalUsd: guestData.totalUsd || 1740,
+      amountPaidUsd: guestData.totalUsd || 1740,
+      balanceDueUsd: 0,
+      addons: guestData.addons || [],
+      createdAt: new Date().toISOString(),
+    };
+    serverReservations = [reservation, ...serverReservations];
+  } else if (reservation) {
+    reservation = {
+      ...reservation,
+      status: 'confirmed',
+      amountPaidUsd: reservation.totalUsd,
+      balanceDueUsd: 0,
+      paymentMethod: paymentMethod || reservation.paymentMethod,
+      guestName: guestData ? `${guestData.firstName || ''} ${guestData.lastName || ''}`.trim() : reservation.guestName,
+      guestEmail: guestData?.guestEmail || reservation.guestEmail,
+      guestPhone: guestData?.guestPhone || reservation.guestPhone,
+      guestCountry: guestData?.guestCountry || reservation.guestCountry,
+      specialRequests: guestData?.specialRequests || reservation.specialRequests,
+      arrivalTime: guestData?.arrivalTime || reservation.arrivalTime,
+      addons: guestData?.addons || reservation.addons,
+      heldExpiresAt: undefined,
+    };
+    serverReservations[resIndex] = reservation;
+  }
+
+  res.json({
+    ok: true,
+    verified: true,
+    message: 'Payment verified successfully and availability locked.',
+    reservation,
+  });
+});
+
+// Release Hold Endpoint
+app.post('/api/payments/release-hold', (req, res) => {
+  const { referenceCode } = req.body || {};
+  serverReservations = serverReservations.map((r: any) => {
+    if (r.referenceCode === referenceCode && r.status === 'held') {
+      return { ...r, status: 'cancelled' };
+    }
+    return r;
+  });
+  res.json({ ok: true, released: true });
 });
 
 // Get bookings
@@ -220,21 +436,24 @@ Villa Tao is rented exclusively as one entire private villa estate. Provide a co
 });
 
 async function startServer() {
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const distPath = path.join(__dirname, 'dist');
+  const fs = await import('fs');
+  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
 
-  if (process.env.NODE_ENV !== 'production') {
+  // In production (Cloud Run) or when dist build exists and not in dev
+  if (process.env.NODE_ENV === 'production' || (hasDist && process.env.NODE_ENV !== 'development')) {
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  } else {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {

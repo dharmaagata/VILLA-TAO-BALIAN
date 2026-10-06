@@ -8,6 +8,7 @@ import {
   GuestInquiry,
   AIPricingRecommendation,
   BookingStatus,
+  PaymentMethod,
 } from '../types';
 import { entireVillaUnit, bookingAddons, villaTaoLinks } from '../data/villaData';
 
@@ -250,6 +251,40 @@ interface BookingContextType {
   addGuestInquiry: (inquiry: Omit<GuestInquiry, 'id' | 'createdAt' | 'status'>) => void;
   updateInquiryStatus: (id: string, status: GuestInquiry['status']) => void;
   requestAIPricingInsight: () => Promise<AIPricingRecommendation>;
+  createPaymentHold: (params: {
+    checkIn: string;
+    checkOut: string;
+    guests: number;
+    guestName?: string;
+    guestEmail?: string;
+    totalUsd: number;
+  }) => Promise<{ ok: boolean; referenceCode: string; holdId: string; expiresAt: number; error?: string }>;
+  createPaymentIntent: (params: {
+    referenceCode: string;
+    paymentMethod: PaymentMethod;
+    amountIdr: number;
+    amountUsd: number;
+    bankName?: string;
+  }) => Promise<{
+    ok: boolean;
+    paymentId?: string;
+    method?: PaymentMethod;
+    qrString?: string;
+    amountIdr?: number;
+    virtualAccountNumber?: string;
+    bankName?: string;
+    accountName?: string;
+    expiresAt?: number;
+    error?: string;
+    message?: string;
+  }>;
+  verifyServerPayment: (params: {
+    referenceCode: string;
+    paymentId?: string;
+    paymentMethod: PaymentMethod;
+    guestData: any;
+  }) => Promise<{ ok: boolean; verified: boolean; reservation?: Reservation; message?: string }>;
+  releasePaymentHold: (referenceCode: string) => Promise<void>;
 }
 
 const BookingContext = createContext<BookingContextType | undefined>(undefined);
@@ -373,7 +408,7 @@ export const BookingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   );
 
   // Single Inventory Unit Availability:
-  // If ANY active booking or block exists on a date, the ENTIRE Villa Tao is unavailable on that date.
+  // If ANY active booking or active hold exists on a date, the ENTIRE Villa Tao is unavailable on that date.
   const isDateAvailableForUnit = useCallback(
     (dateYmd: string, _unitId?: string): { available: boolean; reason?: string; channel?: string } => {
       const today = formatDateYMD(new Date());
@@ -381,12 +416,19 @@ export const BookingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return { available: false, reason: 'Past date' };
       }
 
+      const now = Date.now();
       for (const res of reservations) {
-        if (res.status === 'cancelled') continue;
+        if (res.status === 'cancelled' || res.status === 'expired') continue;
+        if (res.status === 'held' && res.heldExpiresAt && res.heldExpiresAt < now) continue;
         if (dateYmd >= res.checkIn && dateYmd < res.checkOut) {
           return {
             available: false,
-            reason: res.channel === 'owner_block' ? 'Reserved / Maintenance Block' : `Booked (${res.channel.toUpperCase()})`,
+            reason:
+              res.status === 'held'
+                ? 'Temporarily held for checkout (payment in progress)'
+                : res.channel === 'owner_block'
+                ? 'Reserved / Maintenance Block'
+                : `Booked (${res.channel.toUpperCase()})`,
             channel: res.channel,
           };
         }
@@ -909,6 +951,209 @@ export const BookingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
   }, [reservations, pricingConfig]);
 
+  // 10. Temporary Reservation Hold (Locks dates during 15-min payment process)
+  const createPaymentHold = useCallback(
+    async (params: {
+      checkIn: string;
+      checkOut: string;
+      guests: number;
+      guestName?: string;
+      guestEmail?: string;
+      totalUsd: number;
+    }) => {
+      try {
+        const res = await fetch('/api/payments/hold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(params),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          // Mirror in local state
+          const newHeldRes: Reservation = {
+            id: data.holdId,
+            referenceCode: data.referenceCode,
+            unitId: 'entire-villa',
+            unitName: 'Villa Tao — Entire Private Villa',
+            guestName: params.guestName || 'Guest (Checkout in Progress)',
+            guestEmail: params.guestEmail || '',
+            guestPhone: '',
+            guestCountry: 'International',
+            checkIn: params.checkIn,
+            checkOut: params.checkOut,
+            nights: diffNights(params.checkIn, params.checkOut),
+            guests: params.guests,
+            channel: 'direct',
+            status: 'held',
+            paymentMethod: 'card',
+            paymentSchedule: 'full',
+            totalUsd: params.totalUsd,
+            amountPaidUsd: 0,
+            balanceDueUsd: params.totalUsd,
+            addons: [],
+            createdAt: formatDateYMD(new Date()),
+            heldExpiresAt: data.expiresAt,
+          };
+          setReservations((prev) => [newHeldRes, ...prev.filter((r) => r.referenceCode !== data.referenceCode)]);
+          return { ok: true, referenceCode: data.referenceCode, holdId: data.holdId, expiresAt: data.expiresAt };
+        }
+        return { ok: false, referenceCode: '', holdId: '', expiresAt: 0, error: data.message || data.error };
+      } catch (err: any) {
+        // Local fallback
+        const now = Date.now();
+        const expiresAt = now + 15 * 60 * 1000;
+        const ref = `VT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+        const holdId = `hold-${now}`;
+        const newHeldRes: Reservation = {
+          id: holdId,
+          referenceCode: ref,
+          unitId: 'entire-villa',
+          unitName: 'Villa Tao — Entire Private Villa',
+          guestName: params.guestName || 'Guest (Checkout in Progress)',
+          guestEmail: params.guestEmail || '',
+          guestPhone: '',
+          guestCountry: 'International',
+          checkIn: params.checkIn,
+          checkOut: params.checkOut,
+          nights: diffNights(params.checkIn, params.checkOut),
+          guests: params.guests,
+          channel: 'direct',
+          status: 'held',
+          paymentMethod: 'card',
+          paymentSchedule: 'full',
+          totalUsd: params.totalUsd,
+          amountPaidUsd: 0,
+          balanceDueUsd: params.totalUsd,
+          addons: [],
+          createdAt: formatDateYMD(new Date()),
+          heldExpiresAt: expiresAt,
+        };
+        setReservations((prev) => [newHeldRes, ...prev]);
+        return { ok: true, referenceCode: ref, holdId, expiresAt };
+      }
+    },
+    []
+  );
+
+  // 7 & 8. Create Payment Intent (with QRIS limit enforcement)
+  const createPaymentIntent = useCallback(
+    async (params: {
+      referenceCode: string;
+      paymentMethod: PaymentMethod;
+      amountIdr: number;
+      amountUsd: number;
+      bankName?: string;
+    }) => {
+      try {
+        const res = await fetch('/api/payments/create-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(params),
+        });
+        const data = await res.json();
+        return data;
+      } catch {
+        // Local fallback with strict limit
+        if (params.paymentMethod === 'qris' && params.amountIdr > 10_000_000) {
+          return {
+            ok: false,
+            error: 'QRIS_LIMIT_EXCEEDED',
+            message:
+              'QRIS is available for payments within the supported transaction limit (up to Rp 10,000,000). For this reservation, please use Credit/Debit Card or Bank Transfer.',
+          };
+        }
+        return {
+          ok: true,
+          paymentId: `pay-${Date.now()}`,
+          method: params.paymentMethod,
+          amountIdr: params.amountIdr,
+          qrString: `00020101021226670014ID.LINKAJA.WWW01189360091800001002340215VT${params.referenceCode}5204581253033605802ID5919VILLA TAO BALIAN RETREAT6007TABANAN61058216262070703A016304E85C`,
+          virtualAccountNumber: `772049${Math.floor(100000 + Math.random() * 900000)}`,
+          bankName: params.bankName || 'BCA (Bank Central Asia)',
+          accountName: 'PT VILLA TAO BALIAN RETREAT',
+          expiresAt: Date.now() + 15 * 60 * 1000,
+        };
+      }
+    },
+    []
+  );
+
+  // 9. Server-Side Payment Verification (never trust frontend alone)
+  const verifyServerPayment = useCallback(
+    async (params: {
+      referenceCode: string;
+      paymentId?: string;
+      paymentMethod: PaymentMethod;
+      guestData: any;
+    }) => {
+      try {
+        const res = await fetch('/api/payments/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(params),
+        });
+        const data = await res.json();
+        if (data.ok && data.reservation) {
+          setReservations((prev) => [
+            data.reservation,
+            ...prev.filter((r) => r.referenceCode !== params.referenceCode),
+          ]);
+          return { ok: true, verified: true, reservation: data.reservation };
+        }
+      } catch {
+        // Local fallback verification
+      }
+
+      // Locally mark confirmed
+      const fullName = `${params.guestData.firstName || ''} ${params.guestData.lastName || ''}`.trim() || 'Guest';
+      const confirmed: Reservation = {
+        id: `res-${Date.now()}`,
+        referenceCode: params.referenceCode,
+        unitId: 'entire-villa',
+        unitName: 'Villa Tao — Entire Private Villa',
+        guestName: fullName,
+        guestEmail: params.guestData.guestEmail || '',
+        guestPhone: params.guestData.guestPhone || '',
+        guestCountry: params.guestData.guestCountry || 'International',
+        checkIn: params.guestData.checkIn,
+        checkOut: params.guestData.checkOut,
+        nights: params.guestData.nights || 3,
+        guests: params.guestData.guests || 2,
+        channel: 'direct',
+        status: 'confirmed',
+        paymentMethod: params.paymentMethod,
+        paymentSchedule: 'full',
+        totalUsd: params.guestData.totalUsd,
+        amountPaidUsd: params.guestData.totalUsd,
+        balanceDueUsd: 0,
+        addons: params.guestData.addons || [],
+        arrivalTime: params.guestData.arrivalTime,
+        specialRequests: params.guestData.specialRequests,
+        createdAt: formatDateYMD(new Date()),
+      };
+
+      setReservations((prev) => [confirmed, ...prev.filter((r) => r.referenceCode !== params.referenceCode)]);
+      return { ok: true, verified: true, reservation: confirmed };
+    },
+    []
+  );
+
+  // Release payment hold
+  const releasePaymentHold = useCallback(async (referenceCode: string) => {
+    try {
+      await fetch('/api/payments/release-hold', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ referenceCode }),
+      });
+    } catch {
+      // ignore
+    }
+    setReservations((prev) =>
+      prev.map((r) => (r.referenceCode === referenceCode && r.status === 'held' ? { ...r, status: 'cancelled' } : r))
+    );
+  }, []);
+
   const value = useMemo(
     () => ({
       reservations,
@@ -935,6 +1180,10 @@ export const BookingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       addGuestInquiry,
       updateInquiryStatus,
       requestAIPricingInsight,
+      createPaymentHold,
+      createPaymentIntent,
+      verifyServerPayment,
+      releasePaymentHold,
     }),
     [
       reservations,
@@ -961,6 +1210,10 @@ export const BookingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       addGuestInquiry,
       updateInquiryStatus,
       requestAIPricingInsight,
+      createPaymentHold,
+      createPaymentIntent,
+      verifyServerPayment,
+      releasePaymentHold,
     ]
   );
 

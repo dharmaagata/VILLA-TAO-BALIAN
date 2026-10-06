@@ -9,6 +9,13 @@ import {
   Check,
   Users,
   Waves,
+  Eye,
+  AlertCircle,
+  Clock,
+  QrCode,
+  ShieldCheck,
+  ChevronRight,
+  Printer,
 } from 'lucide-react';
 import {
   villaTaoLinks,
@@ -17,56 +24,72 @@ import {
   bookingAddons,
   officialWhatsAppNumber,
 } from '../data/villaData';
-import { useBooking } from '../context/BookingContext';
+import { useBooking, diffNights, formatDateYMD } from '../context/BookingContext';
 import { AvailabilityCalendar } from './AvailabilityCalendar';
-import { PaymentMethod, Reservation } from '../types';
+import { PaymentMethod, Reservation, QRIS_MAX_LIMIT_IDR } from '../types';
 
 interface BookingModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-export const BookingModal: React.FC<BookingModalProps> = ({
-  isOpen,
-  onClose,
-}) => {
+export const BookingModal: React.FC<BookingModalProps> = ({ isOpen, onClose }) => {
   const {
+    currency,
     formatPrice,
     getNextAvailableWindow,
     isDateRangeAvailable,
     calculateStayPrice,
-    createReservation,
+    createPaymentHold,
+    createPaymentIntent,
+    verifyServerPayment,
+    releasePaymentHold,
   } = useBooking();
 
+  // Modal Step sequence: 'dates' -> 'stay' -> 'guest' -> 'payment' -> 'confirmed'
+  const [modalStep, setModalStep] = useState<'dates' | 'stay' | 'guest' | 'payment' | 'confirmed'>('dates');
+
+  // Dates & Guests
   const [checkIn, setCheckIn] = useState<string>('');
   const [checkOut, setCheckOut] = useState<string>('');
   const [guests, setGuests] = useState<number>(2);
   const [selectedAddons, setSelectedAddons] = useState<string[]>([]);
-  const [step, setStep] = useState<'dates' | 'payment' | 'confirmed'>('dates');
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
-  // Guest & Payment state
+  // Guest Details
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
-  const [guestCountry, setGuestCountry] = useState('');
+  const [guestCountry, setGuestCountry] = useState('Indonesia');
   const [specialRequests, setSpecialRequests] = useState('');
-  const [paymentSchedule, setPaymentSchedule] = useState<'full' | 'deposit_50'>('full');
+
+  // Payment
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('card');
+  const [selectedVaBank, setSelectedVaBank] = useState('bca');
+  const [heldRefCode, setHeldRefCode] = useState<string>('');
+  const [heldExpiresAt, setHeldExpiresAt] = useState<number>(0);
+  const [holdTimerSeconds, setHoldTimerSeconds] = useState<number>(900);
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvc, setCardCvc] = useState('');
+  const [cardHolder, setCardHolder] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+
+  // Confirmed state
   const [confirmedRes, setConfirmedRes] = useState<Reservation | null>(null);
 
   useEffect(() => {
-    const win = getNextAvailableWindow('entire-villa', 3);
-    setCheckIn(win.checkIn);
-    setCheckOut(win.checkOut);
-    setStep('dates');
-    setConfirmedRes(null);
-    setErrorMsg(null);
+    if (isOpen) {
+      const win = getNextAvailableWindow('entire-villa', 3);
+      setCheckIn(win.checkIn);
+      setCheckOut(win.checkOut);
+      setModalStep('dates');
+      setConfirmedRes(null);
+      setAvailabilityError(null);
+      setPaymentError(null);
+    }
   }, [isOpen, getNextAvailableWindow]);
 
   useEffect(() => {
@@ -77,575 +100,687 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  // Hold timer countdown
+  useEffect(() => {
+    if (modalStep !== 'payment' || heldExpiresAt <= 0) return;
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.round((heldExpiresAt - Date.now()) / 1000));
+      setHoldTimerSeconds(remaining);
+      if (remaining <= 0) {
+        clearInterval(interval);
+        setPaymentError('Your 15-minute checkout reservation hold has expired. Please recheck availability.');
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [modalStep, heldExpiresAt]);
+
   if (!isOpen) return null;
 
   const priceBreakdown = calculateStayPrice(checkIn, checkOut, guests, selectedAddons);
   const rangeValidation = isDateRangeAvailable('entire-villa', checkIn, checkOut);
-  const amountDueNowUsd =
-    paymentSchedule === 'deposit_50' ? priceBreakdown.depositAmountUsd : priceBreakdown.totalDirectUsd;
+  const totalAmountIdr = Math.round(priceBreakdown.totalDirectUsd * 15800);
+  const isQrisSupported = totalAmountIdr <= QRIS_MAX_LIMIT_IDR;
 
   const toggleAddon = (id: string) => {
     setSelectedAddons((prev) => (prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id]));
   };
 
-  const handleSubmitBooking = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-
-    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
-    if (!fullName || !guestEmail.trim() || !guestPhone.trim()) {
-      setErrorMsg('Please complete your name, email address, and WhatsApp/phone number.');
+  const handleCheckAvailability = () => {
+    setAvailabilityError(null);
+    if (!checkIn || !checkOut) {
+      setAvailabilityError('Please choose both check-in and check-out dates.');
+      return;
+    }
+    if (diffNights(checkIn, checkOut) <= 0) {
+      setAvailabilityError('Check-out date must be after check-in date.');
       return;
     }
     if (!rangeValidation.available) {
-      setErrorMsg('Villa Tao is unavailable for the selected dates. Please choose open dates.');
+      setAvailabilityError(
+        'VILLA TAO IS UNAVAILABLE FOR THESE DATES. Please select different dates from the calendar.'
+      );
       return;
     }
-    if (paymentMethod === 'card' && (cardNumber.replace(/\D/g, '').length < 12 || !cardExpiry || !cardCvc)) {
-      setErrorMsg('Please enter valid payment card details.');
+    setModalStep('stay');
+  };
+
+  const handleContinueToPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPaymentError(null);
+
+    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
+    if (!fullName || !guestEmail.trim() || !guestPhone.trim()) {
+      setPaymentError('Please complete your name, email address, and WhatsApp/phone number.');
       return;
     }
 
     setIsProcessing(true);
-    await new Promise((r) => setTimeout(r, 750));
-
-    const status =
-      paymentMethod === 'card'
-        ? paymentSchedule === 'full'
-          ? 'confirmed'
-          : 'deposit_paid'
-        : 'pending';
-    const amountPaid = paymentMethod === 'card' ? amountDueNowUsd : 0;
-
-    const created = await createReservation({
-      unitId: 'entire-villa',
-      unitName: 'Villa Tao — Entire Private Villa',
-      guestName: fullName,
-      guestEmail: guestEmail.trim(),
-      guestPhone: guestPhone.trim(),
-      guestCountry: guestCountry.trim() || 'International',
+    const holdRes = await createPaymentHold({
       checkIn,
       checkOut,
-      nights: priceBreakdown.nights,
       guests,
-      channel: paymentMethod === 'whatsapp_concierge' ? 'whatsapp' : 'direct',
-      status,
-      paymentMethod,
-      paymentSchedule,
+      guestName: fullName,
+      guestEmail: guestEmail.trim(),
       totalUsd: priceBreakdown.totalDirectUsd,
-      amountPaidUsd: amountPaid,
-      balanceDueUsd: priceBreakdown.totalDirectUsd - amountPaid,
-      addons: selectedAddons,
-      specialRequests,
     });
-
     setIsProcessing(false);
-    setConfirmedRes(created);
-    setStep('confirmed');
 
-    if (paymentMethod === 'whatsapp_concierge') {
-      const msg = `*Villa Tao Direct Booking (${created.referenceCode})*\n• Entire Private Villa Rental\n• Dates: ${created.checkIn} to ${created.checkOut} (${created.nights} nights)\n• Guests: ${created.guests}\n• Total Direct Rate: ${formatPrice(created.totalUsd)}\nPlease confirm my reservation.`;
-      window.open(getWhatsAppUrl('booking', msg), '_blank');
+    if (!holdRes.ok) {
+      setPaymentError(holdRes.error || 'Failed to hold dates. Please try again.');
+      return;
     }
+
+    setHeldRefCode(holdRes.referenceCode);
+    setHeldExpiresAt(holdRes.expiresAt);
+    setModalStep('payment');
   };
+
+  const handleCompletePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPaymentError(null);
+
+    if (holdTimerSeconds <= 0) {
+      setPaymentError('Your reservation hold has expired. Please recheck availability.');
+      return;
+    }
+
+    if (paymentMethod === 'card') {
+      const rawCard = cardNumber.replace(/\s/g, '');
+      if (rawCard.length < 12 || !cardExpiry || !cardCvc || !cardHolder.trim()) {
+        setPaymentError('Please enter valid credit/debit card details.');
+        return;
+      }
+    }
+
+    if (paymentMethod === 'qris' && !isQrisSupported) {
+      setPaymentError(
+        `QRIS is available up to Rp 10,000,000. Total is Rp ${totalAmountIdr.toLocaleString()}. Please use Card or Bank Transfer.`
+      );
+      return;
+    }
+
+    setIsProcessing(true);
+    const verification = await verifyServerPayment({
+      referenceCode: heldRefCode,
+      paymentMethod,
+      paymentId: `pay-${Date.now()}`,
+      guestData: {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        guestEmail: guestEmail.trim(),
+        guestPhone: guestPhone.trim(),
+        guestCountry: guestCountry.trim() || 'International',
+        checkIn,
+        checkOut,
+        nights: priceBreakdown.nights,
+        guests,
+        totalUsd: priceBreakdown.totalDirectUsd,
+        addons: selectedAddons,
+        specialRequests,
+      },
+    });
+    setIsProcessing(false);
+
+    if (!verification.ok || !verification.reservation) {
+      setPaymentError(verification.message || 'Payment verification failed.');
+      return;
+    }
+
+    setConfirmedRes(verification.reservation);
+    setModalStep('confirmed');
+  };
+
+  const timerMin = Math.floor(holdTimerSeconds / 60);
+  const timerSec = holdTimerSeconds % 60;
+  const formattedTimer = `${String(timerMin).padStart(2, '0')}:${String(timerSec).padStart(2, '0')}`;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xs animate-in fade-in duration-300"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-4xl bg-[#FAF8F5] text-[#2C221E] shadow-2xl p-5 sm:p-8 lg:p-10 border border-[#2C221E]/10 overflow-y-auto max-h-[92vh]"
+        className="relative w-full max-w-4xl max-h-[92vh] bg-[#FAF8F5] text-[#2C221E] shadow-2xl overflow-y-auto flex flex-col border border-[#2C221E]/15"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Close Button */}
-        <button
-          onClick={onClose}
-          aria-label="Close Booking Modal"
-          className="absolute top-3.5 right-3.5 sm:top-5 sm:right-5 p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-[#2C221E]/70 hover:text-[#2C221E] transition-colors"
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        {/* Modal Header */}
-        <div className="mb-6 pb-4 border-b border-[#2C221E]/10 pr-10">
-          <span className="text-[10px] uppercase tracking-[0.28em] text-[#8C7355] block mb-1">
-            VILLA TAO BALIAN • SOLE PRIVATE OCCUPANCY
-          </span>
-          <h2 className="font-serif text-2xl sm:text-3xl text-[#2C221E] font-normal">
-            {step === 'confirmed'
-              ? 'Reservation Confirmed'
-              : step === 'payment'
-              ? 'Guest Details & Direct Payment'
-              : 'Book the Entire Villa'}
-          </h2>
-          <p className="text-xs text-[#2C221E]/70 font-light mt-1">
-            The entire villa is exclusively yours during your stay • 4 Bedrooms, Private Pool, Ocean View, Max 10 Guests.
-          </p>
+        {/* Header */}
+        <div className="p-5 sm:p-6 border-b border-[#2C221E]/10 flex items-center justify-between bg-[#F5F2EB] sticky top-0 z-20">
+          <div>
+            <span className="text-[10px] uppercase tracking-[0.24em] text-[#8C7355] block font-medium">
+              VILLA TAO BALIAN • DIRECT RESERVATION
+            </span>
+            <h3 className="font-serif text-xl sm:text-2xl text-[#2C221E] font-normal">
+              {modalStep === 'dates' && 'Step 1: Select Dates & Guests'}
+              {modalStep === 'stay' && 'Step 2: Review Your Stay'}
+              {modalStep === 'guest' && 'Step 3: Guest Details'}
+              {modalStep === 'payment' && 'Step 4: Secure Payment'}
+              {modalStep === 'confirmed' && 'Step 5: Booking Confirmed'}
+            </h3>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close Booking Modal"
+            className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center text-[#2C221E]/60 hover:text-[#2C221E] transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {step === 'confirmed' && confirmedRes ? (
-          <div className="space-y-6 py-2">
-            <div className="p-6 bg-[#F5F2EB] border border-[#2C221E]/15 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <span className="text-[10px] uppercase tracking-[0.24em] text-[#8C7355] block">
-                  BOOKING REFERENCE
+        {/* Modal Body */}
+        <div className="p-5 sm:p-8 space-y-6 flex-1">
+          {/* STEP 1: SELECT DATES & GUESTS */}
+          {modalStep === 'dates' && (
+            <div className="space-y-6 max-w-2xl mx-auto animate-in fade-in">
+              <div className="p-4 bg-[#F5F2EB] border border-[#2C221E]/10 space-y-1">
+                <span className="text-[10px] uppercase tracking-[0.2em] text-[#8C7355] font-semibold block">
+                  ENTIRE PRIVATE VILLA
                 </span>
-                <span className="font-mono text-xl sm:text-2xl text-[#2C221E] tracking-widest">
-                  {confirmedRes.referenceCode}
-                </span>
-                <p className="text-xs text-[#2C221E]/70 font-light mt-1">
-                  Villa Tao — Entire Private Villa • {confirmedRes.checkIn} to {confirmedRes.checkOut} ({confirmedRes.nights} nights)
+                <p className="text-xs text-[#2C221E]/80 font-light">
+                  Select your dates to verify live availability for Villa Tao's entire 4-bedroom oceanfront estate.
                 </p>
               </div>
-              <div className="text-left sm:text-right">
-                <span className="text-[10px] uppercase tracking-[0.2em] text-[#8C7355] block">
-                  TOTAL DIRECT RATE
-                </span>
-                <span className="font-serif text-2xl text-[#2C221E]">
-                  {formatPrice(confirmedRes.totalUsd)}
-                </span>
-                <span className="text-[10px] uppercase tracking-wider text-[#2C221E]/60 block">
-                  {confirmedRes.status.replace('_', ' ')}
-                </span>
-              </div>
-            </div>
 
-            <p className="text-xs sm:text-sm text-[#2C221E]/80 font-light leading-relaxed">
-              Your dates have been locked in our master calendar and synchronized across Airbnb and Booking.com. You can manage your reservation at any time using your reference code{' '}
-              <strong className="font-mono">{confirmedRes.referenceCode}</strong>.
-            </p>
-
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-[#2C221E]/10">
-              <a
-                href={getWhatsAppUrl(
-                  'booking',
-                  `Hello Villa Tao, my direct booking reference is ${confirmedRes.referenceCode} (${confirmedRes.checkIn} to ${confirmedRes.checkOut}).`
-                )}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 px-6 py-3.5 bg-[#2C221E] text-[#FAF8F5] text-xs uppercase tracking-[0.2em]"
-              >
-                <MessageCircle className="w-4 h-4 text-[#25D366]" />
-                <span>Connect with WhatsApp Concierge</span>
-              </a>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="w-full sm:w-auto px-6 py-3.5 border border-[#2C221E]/25 text-xs uppercase tracking-[0.2em] text-[#2C221E]"
-              >
-                Return to Website
-              </button>
-            </div>
-          </div>
-        ) : step === 'dates' ? (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            <div className="lg:col-span-7 space-y-5">
-              {/* Single Villa Banner */}
-              <div className="p-4 bg-[#F5F2EB] border border-[#2C221E]/12 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <span className="text-[9px] uppercase tracking-[0.22em] text-[#8C7355] block">
-                    VILLA TAO • ENTIRE PRIVATE VILLA
-                  </span>
-                  <h4 className="font-serif text-lg text-[#2C221E] leading-snug">
-                    Entire Private Villa
-                  </h4>
-                  <p className="text-xs text-[#2C221E]/75 font-light mt-0.5">
-                    The entire villa is exclusively yours during your stay.
-                  </p>
-                  <p className="text-[11px] text-[#8C7355] font-medium mt-1">
-                    4 Bedrooms · Private Pool · Ocean View
-                  </p>
-                </div>
-                <div className="text-left sm:text-right shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#2C221E]/10">
-                  <span className="font-serif text-lg text-[#2C221E] block">
-                    {formatPrice(entireVillaUnit.baseNightlyRate || 580)}
-                  </span>
-                  <span className="text-[9px] uppercase tracking-wider text-[#2C221E]/55">/ night base rate</span>
-                </div>
-              </div>
-
-              {/* Date & Guests Row */}
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1">
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
                     Check-In
                   </label>
                   <input
                     type="date"
+                    required
                     value={checkIn}
-                    onChange={(e) => setCheckIn(e.target.value)}
-                    className="w-full px-2.5 py-2 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs text-[#2C221E]"
+                    min={formatDateYMD(new Date())}
+                    onChange={(e) => {
+                      setCheckIn(e.target.value);
+                      setAvailabilityError(null);
+                    }}
+                    className="w-full px-3 py-2 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs font-mono text-[#2C221E]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1">
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
                     Check-Out
                   </label>
                   <input
                     type="date"
+                    required
                     value={checkOut}
-                    onChange={(e) => setCheckOut(e.target.value)}
-                    className="w-full px-2.5 py-2 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs text-[#2C221E]"
+                    min={checkIn || formatDateYMD(new Date())}
+                    onChange={(e) => {
+                      setCheckOut(e.target.value);
+                      setAvailabilityError(null);
+                    }}
+                    className="w-full px-3 py-2 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs font-mono text-[#2C221E]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1">
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
                     Guests (Max 10)
                   </label>
                   <select
                     value={guests}
                     onChange={(e) => setGuests(Number(e.target.value))}
-                    className="w-full px-2.5 py-2 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs text-[#2C221E]"
+                    className="w-full px-3 py-2 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs text-[#2C221E]"
                   >
-                    {Array.from({ length: 9 }, (_, i) => i + 2).map((n) => (
+                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
                       <option key={n} value={n}>
-                        {n} Guests
+                        {n} {n === 1 ? 'Guest' : 'Guests'} (Entire Villa)
                       </option>
                     ))}
-                    <option value={1}>1 Guest</option>
                   </select>
                 </div>
               </div>
 
-              {/* Compact Availability Calendar for the Entire Villa */}
-              <AvailabilityCalendar
-                unitId="entire-villa"
-                checkIn={checkIn}
-                checkOut={checkOut}
-                onSelectDates={(inD, outD) => {
-                  setCheckIn(inD);
-                  setCheckOut(outD);
-                  setErrorMsg(null);
-                }}
-                compact
-              />
+              {availabilityError && (
+                <div className="p-3 bg-[#8C7355]/10 border border-[#8C7355] text-xs text-[#2C221E] flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-[#8C7355] shrink-0" />
+                  <span>{availabilityError}</span>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleCheckAvailability}
+                className="w-full py-3.5 bg-[#2C221E] text-[#FAF8F5] text-xs uppercase tracking-[0.22em] font-medium hover:bg-[#3E342B] transition-colors flex items-center justify-center space-x-2"
+              >
+                <span>CHECK AVAILABILITY</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+
+              <div className="pt-2">
+                <AvailabilityCalendar
+                  unitId="entire-villa"
+                  checkIn={checkIn}
+                  checkOut={checkOut}
+                  onSelectDates={(newIn, newOut) => {
+                    setCheckIn(newIn);
+                    setCheckOut(newOut);
+                    setAvailabilityError(null);
+                  }}
+                />
+              </div>
             </div>
+          )}
 
-            {/* Right Summary Column */}
-            <div className="lg:col-span-5 space-y-4">
-              <div className="p-5 bg-[#F5F2EB] border border-[#2C221E]/12 space-y-4">
+          {/* STEP 2: YOUR STAY & CALCULATED PRICE */}
+          {modalStep === 'stay' && (
+            <div className="space-y-6 max-w-2xl mx-auto animate-in fade-in">
+              <div className="p-4 bg-[#F5F2EB] border border-[#2C221E]/12 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <span className="text-[9px] uppercase tracking-[0.22em] text-[#8C7355] block">
-                    YOUR RESERVATION
+                  <span className="text-[9px] uppercase tracking-[0.22em] text-[#8C7355] block font-medium">
+                    CONFIRMED AVAILABLE
                   </span>
-                  <h3 className="font-serif text-lg text-[#2C221E]">
+                  <h4 className="font-serif text-lg text-[#2C221E]">
                     Villa Tao — Entire Private Villa
-                  </h3>
-                  <p className="text-xs text-[#2C221E]/65 font-light mt-0.5">
-                    {priceBreakdown.nights} Nights • {guests} Guest(s) • {priceBreakdown.seasonLabel}
+                  </h4>
+                  <p className="text-xs text-[#2C221E]/70 font-light">
+                    {checkIn} → {checkOut} • {priceBreakdown.nights} Nights • {guests} Guests
                   </p>
                 </div>
-
-                <div className="space-y-2 text-xs border-t border-[#2C221E]/10 pt-3">
-                  <div className="flex justify-between text-[#2C221E]/80">
-                    <span>Entire Villa Rate ({priceBreakdown.nights} nights)</span>
-                    <span>{formatPrice(priceBreakdown.subtotalAfterDiscounts)}</span>
-                  </div>
-                  <div className="flex justify-between text-[#2C221E]/65">
-                    <span>Villa Care &amp; Tax (10%)</span>
-                    <span>{formatPrice(priceBreakdown.taxesAndServiceFee)}</span>
-                  </div>
-                  <div className="flex justify-between items-baseline pt-2 border-t border-[#2C221E]/10">
-                    <span className="text-[10px] uppercase tracking-[0.2em] text-[#8C7355]">
-                      Total Rate
-                    </span>
-                    <span className="font-serif text-2xl text-[#2C221E]">
-                      {formatPrice(priceBreakdown.totalDirectUsd)}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-[#8C7355] font-light">
-                    Direct booking saves {formatPrice(priceBreakdown.directSavingsUsd)} vs OTA platforms
-                  </p>
+                <div className="text-left sm:text-right shrink-0">
+                  <span className="font-serif text-xl text-[#2C221E] block">
+                    {formatPrice(priceBreakdown.totalDirectUsd)}
+                  </span>
+                  <span className="text-[9px] uppercase tracking-wider text-[#2C221E]/55">
+                    Total Direct Rate
+                  </span>
                 </div>
+              </div>
 
-                {errorMsg && <p className="text-xs text-[#8C7355]">{errorMsg}</p>}
+              {/* Price Details */}
+              <div className="p-4 bg-white border border-[#2C221E]/10 space-y-2 text-xs">
+                <div className="flex justify-between text-[#2C221E]/80">
+                  <span>Nightly Rate ({priceBreakdown.nights} nights)</span>
+                  <span className="font-medium text-[#2C221E]">{formatPrice(priceBreakdown.subtotalAfterDiscounts)}</span>
+                </div>
+                {priceBreakdown.lengthOfStayDiscountAmount > 0 && (
+                  <div className="flex justify-between text-[#8C7355]">
+                    <span>Long-Stay Privilege ({priceBreakdown.lengthOfStayDiscountPercent}%)</span>
+                    <span>-{formatPrice(priceBreakdown.lengthOfStayDiscountAmount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-[#2C221E]/70">
+                  <span>Villa Care &amp; Tax (10%)</span>
+                  <span>{formatPrice(priceBreakdown.taxesAndServiceFee)}</span>
+                </div>
+                <div className="pt-2 border-t border-[#2C221E]/10 flex justify-between font-serif text-base text-[#2C221E]">
+                  <span>Total</span>
+                  <span>{formatPrice(priceBreakdown.totalDirectUsd)}</span>
+                </div>
+              </div>
 
+              {/* Add-ons */}
+              <div className="space-y-2">
+                <span className="text-[10px] uppercase tracking-wider text-[#8C7355] block font-medium">
+                  Curated Enhancements
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {bookingAddons.map((addon) => {
+                    const active = selectedAddons.includes(addon.id);
+                    return (
+                      <div
+                        key={addon.id}
+                        onClick={() => toggleAddon(addon.id)}
+                        className={`p-3 border cursor-pointer text-xs flex items-center justify-between transition-colors ${
+                          active ? 'bg-[#F5F2EB] border-[#2C221E]' : 'bg-white border-[#2C221E]/15'
+                        }`}
+                      >
+                        <span className="font-medium truncate mr-2">{addon.name}</span>
+                        <span className="text-[11px] font-mono shrink-0">+{formatPrice(addon.priceUsd)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!rangeValidation.available) {
-                      setErrorMsg(rangeValidation.reason || 'Villa Tao is unavailable for these dates.');
-                      return;
-                    }
-                    setStep('payment');
-                  }}
-                  className="w-full py-3.5 min-h-[44px] bg-[#2C221E] text-[#FAF8F5] hover:bg-[#3E342B] text-xs uppercase tracking-[0.22em] transition-colors"
+                  onClick={() => setModalStep('dates')}
+                  className="px-5 py-3 border border-[#2C221E]/20 text-xs uppercase tracking-wider"
                 >
-                  CONTINUE TO GUEST DETAILS
+                  Change Dates
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalStep('guest')}
+                  className="flex-1 py-3 bg-[#2C221E] text-[#FAF8F5] text-xs uppercase tracking-[0.2em] font-medium flex items-center justify-center space-x-2"
+                >
+                  <span>CONTINUE TO BOOK</span>
+                  <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
+            </div>
+          )}
 
-              {/* Partner Channels Alternative */}
-              <div className="p-4 bg-[#FAF8F5] border border-[#2C221E]/10 space-y-2">
-                <span className="text-[9px] uppercase tracking-[0.22em] text-[#8C7355] block">
-                  OR BOOK VIA OFFICIAL PARTNERS
-                </span>
-                <div className="grid grid-cols-1 gap-2">
-                  <a
-                    href={getWhatsAppUrl(
-                      'booking',
-                      `Hello Villa Tao, I would like to inquire about reserving the entire private villa from ${checkIn} to ${checkOut} (${guests} guests).`
-                    )}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="py-2.5 px-3 border border-[#2C221E]/15 hover:border-[#2C221E] text-[11px] uppercase tracking-[0.18em] flex items-center justify-between"
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
-                      <span>Direct WhatsApp</span>
-                    </span>
-                    <ArrowUpRight className="w-3.5 h-3.5" />
-                  </a>
-                  <div className="grid grid-cols-2 gap-2">
-                    <a
-                      href={villaTaoLinks.airbnb}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="py-2.5 px-3 border border-[#2C221E]/15 hover:border-[#2C221E] text-[10px] uppercase tracking-[0.18em] flex items-center justify-between"
-                    >
-                      <span>Airbnb</span>
-                      <ArrowUpRight className="w-3 h-3" />
-                    </a>
-                    <a
-                      href={villaTaoLinks.bookingCom}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="py-2.5 px-3 border border-[#2C221E]/15 hover:border-[#2C221E] text-[10px] uppercase tracking-[0.18em] flex items-center justify-between"
-                    >
-                      <span>Booking.com</span>
-                      <ArrowUpRight className="w-3 h-3" />
-                    </a>
-                  </div>
+          {/* STEP 3: GUEST DETAILS */}
+          {modalStep === 'guest' && (
+            <form onSubmit={handleContinueToPayment} className="space-y-5 max-w-2xl mx-auto animate-in fade-in">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
+                    First Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="Maya"
+                    className="w-full px-3 py-2 bg-white border border-[#2C221E]/20 text-xs"
+                  />
                 </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          /* STEP 2: GUEST DETAILS & PAYMENT */
-          <form onSubmit={handleSubmitBooking} className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/75 mb-1">
-                  First Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  placeholder="First Name"
-                  className="w-full px-3 py-2.5 min-h-[42px] bg-white border border-[#2C221E]/20 text-xs"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/75 mb-1">
-                  Last Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  placeholder="Last Name"
-                  className="w-full px-3 py-2.5 min-h-[42px] bg-white border border-[#2C221E]/20 text-xs"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/75 mb-1">
-                  Email Address *
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={guestEmail}
-                  onChange={(e) => setGuestEmail(e.target.value)}
-                  placeholder="email@domain.com"
-                  className="w-full px-3 py-2.5 min-h-[42px] bg-white border border-[#2C221E]/20 text-xs"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/75 mb-1">
-                  WhatsApp / Phone *
-                </label>
-                <input
-                  type="tel"
-                  required
-                  value={guestPhone}
-                  onChange={(e) => setGuestPhone(e.target.value)}
-                  placeholder="+61 400 000 000"
-                  className="w-full px-3 py-2.5 min-h-[42px] bg-white border border-[#2C221E]/20 text-xs"
-                />
-              </div>
-            </div>
-
-            {/* Curated Add-ons */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              {bookingAddons.map((addon) => {
-                const active = selectedAddons.includes(addon.id);
-                return (
-                  <button
-                    key={addon.id}
-                    type="button"
-                    onClick={() => toggleAddon(addon.id)}
-                    className={`p-3 border text-left transition-colors ${
-                      active ? 'bg-[#F5F2EB] border-[#2C221E]' : 'bg-white border-[#2C221E]/12'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-xs font-medium text-[#2C221E]">
-                      <span className="truncate">{addon.name.split('(')[0]}</span>
-                      {active && <Check className="w-3.5 h-3.5 text-[#8C7355] shrink-0" />}
-                    </div>
-                    <span className="text-[10px] text-[#8C7355] block mt-0.5">
-                      +{formatPrice(addon.priceUsd)} {addon.perNight ? '/guest/night' : ''}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Payment Method & Schedule */}
-            <div className="p-5 bg-[#F5F2EB] border border-[#2C221E]/12 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[10px] uppercase tracking-[0.22em] text-[#8C7355] flex items-center gap-1.5">
-                  <Lock className="w-3 h-3" />
-                  <span>Direct Payment Settlement</span>
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentSchedule('full')}
-                    className={`px-3 py-1 text-[10px] uppercase tracking-wider border ${
-                      paymentSchedule === 'full'
-                        ? 'bg-[#2C221E] text-white border-[#2C221E]'
-                        : 'bg-white text-[#2C221E] border-[#2C221E]/20'
-                    }`}
-                  >
-                    100% Full ({formatPrice(priceBreakdown.totalDirectUsd)})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentSchedule('deposit_50')}
-                    className={`px-3 py-1 text-[10px] uppercase tracking-wider border ${
-                      paymentSchedule === 'deposit_50'
-                        ? 'bg-[#2C221E] text-white border-[#2C221E]'
-                        : 'bg-white text-[#2C221E] border-[#2C221E]/20'
-                    }`}
-                  >
-                    50% Deposit ({formatPrice(priceBreakdown.depositAmountUsd)})
-                  </button>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
+                    Last Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    placeholder="Sugiarto"
+                    className="w-full px-3 py-2 bg-white border border-[#2C221E]/20 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
+                    Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={guestEmail}
+                    onChange={(e) => setGuestEmail(e.target.value)}
+                    placeholder="maya@example.com"
+                    className="w-full px-3 py-2 bg-white border border-[#2C221E]/20 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
+                    WhatsApp / Phone *
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={guestPhone}
+                    onChange={(e) => setGuestPhone(e.target.value)}
+                    placeholder="+62 812 3456 7890"
+                    className="w-full px-3 py-2 bg-white border border-[#2C221E]/20 text-xs"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-[10px] uppercase tracking-wider text-[#2C221E]/70 mb-1 font-medium">
+                    Country of Residence
+                  </label>
+                  <input
+                    type="text"
+                    value={guestCountry}
+                    onChange={(e) => setGuestCountry(e.target.value)}
+                    placeholder="Indonesia / Australia / etc."
+                    className="w-full px-3 py-2 bg-white border border-[#2C221E]/20 text-xs"
+                  />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {paymentError && (
+                <div className="p-3 bg-[#8C7355]/10 border border-[#8C7355] text-xs text-[#2C221E]">
+                  {paymentError}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setModalStep('stay')}
+                  className="px-5 py-3 border border-[#2C221E]/20 text-xs uppercase tracking-wider"
+                >
+                  Back to Stay
+                </button>
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="flex-1 py-3 bg-[#2C221E] text-[#FAF8F5] text-xs uppercase tracking-[0.2em] font-medium flex items-center justify-center space-x-2"
+                >
+                  <span>{isProcessing ? 'HOLDING DATES...' : 'CONTINUE TO PAYMENT'}</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* STEP 4: PAYMENT (CARD, QRIS, VIRTUAL ACCOUNT) */}
+          {modalStep === 'payment' && (
+            <form onSubmit={handleCompletePayment} className="space-y-5 max-w-2xl mx-auto animate-in fade-in">
+              <div className="p-3.5 bg-[#FAF8F5] border border-[#8C7355] flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-2">
+                  <Clock className="w-4 h-4 text-[#8C7355] animate-pulse" />
+                  <span className="font-semibold text-[#2C221E]">
+                    HOLD ACTIVE • {formattedTimer} REMAINING ({heldRefCode})
+                  </span>
+                </div>
+                <span className="font-serif text-sm font-medium">
+                  {formatPrice(priceBreakdown.totalDirectUsd)}
+                </span>
+              </div>
+
+              {/* Method Tabs */}
+              <div className="grid grid-cols-3 gap-2 text-xs">
                 <button
                   type="button"
                   onClick={() => setPaymentMethod('card')}
-                  className={`py-2.5 px-3 border text-xs uppercase tracking-wider flex items-center justify-center gap-2 ${
-                    paymentMethod === 'card'
-                      ? 'bg-white border-[#2C221E] font-medium'
-                      : 'border-[#2C221E]/15 text-[#2C221E]/65'
+                  className={`p-3 border text-center font-medium uppercase transition-colors ${
+                    paymentMethod === 'card' ? 'bg-[#2C221E] text-[#FAF8F5] border-[#2C221E]' : 'bg-white border-[#2C221E]/20'
                   }`}
                 >
-                  <CreditCard className="w-3.5 h-3.5" />
-                  <span>Card Checkout</span>
+                  Card
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod('bank_transfer')}
-                  className={`py-2.5 px-3 border text-xs uppercase tracking-wider flex items-center justify-center gap-2 ${
-                    paymentMethod === 'bank_transfer'
-                      ? 'bg-white border-[#2C221E] font-medium'
-                      : 'border-[#2C221E]/15 text-[#2C221E]/65'
+                  onClick={() => setPaymentMethod('qris')}
+                  className={`p-3 border text-center font-medium uppercase transition-colors ${
+                    paymentMethod === 'qris' ? 'bg-[#2C221E] text-[#FAF8F5] border-[#2C221E]' : 'bg-white border-[#2C221E]/20'
                   }`}
                 >
-                  <Building2 className="w-3.5 h-3.5" />
-                  <span>Wise / Bank Wire</span>
+                  QRIS
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod('whatsapp_concierge')}
-                  className={`py-2.5 px-3 border text-xs uppercase tracking-wider flex items-center justify-center gap-2 ${
-                    paymentMethod === 'whatsapp_concierge'
-                      ? 'bg-white border-[#2C221E] font-medium'
-                      : 'border-[#2C221E]/15 text-[#2C221E]/65'
+                  onClick={() => setPaymentMethod('virtual_account')}
+                  className={`p-3 border text-center font-medium uppercase transition-colors ${
+                    paymentMethod === 'virtual_account'
+                      ? 'bg-[#2C221E] text-[#FAF8F5] border-[#2C221E]'
+                      : 'bg-white border-[#2C221E]/20'
                   }`}
                 >
-                  <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
-                  <span>WhatsApp Direct</span>
+                  Virtual Account
                 </button>
               </div>
 
+              {/* Card Inputs */}
               {paymentMethod === 'card' && (
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1">
-                  <div className="sm:col-span-6">
+                <div className="p-4 bg-white border border-[#2C221E]/15 space-y-3 text-xs">
+                  <div>
+                    <label className="block text-[10px] uppercase text-[#2C221E]/70 mb-1">Cardholder Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={cardHolder}
+                      onChange={(e) => setCardHolder(e.target.value)}
+                      placeholder="Name on card"
+                      className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#2C221E]/20 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase text-[#2C221E]/70 mb-1">Card Number</label>
                     <input
                       type="text"
                       required
                       value={cardNumber}
-                      onChange={(e) =>
-                        setCardNumber(
-                          e.target.value
-                            .replace(/\D/g, '')
-                            .slice(0, 16)
-                            .replace(/(\d{4})(?=\d)/g, '$1 ')
-                        )
-                      }
-                      placeholder="Card Number (4532 •••• •••• ••••)"
-                      className="w-full px-3 py-2.5 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs font-mono"
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <input
-                      type="text"
-                      required
-                      value={cardExpiry}
                       onChange={(e) => {
-                        const d = e.target.value.replace(/\D/g, '').slice(0, 4);
-                        setCardExpiry(d.length >= 3 ? `${d.slice(0, 2)}/${d.slice(2)}` : d);
+                        const digits = e.target.value.replace(/\D/g, '').slice(0, 16);
+                        setCardNumber(digits.replace(/(\d{4})(?=\d)/g, '$1 '));
                       }}
-                      placeholder="MM/YY"
-                      className="w-full px-3 py-2.5 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs font-mono"
+                      placeholder="4532 •••• •••• ••••"
+                      className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#2C221E]/20 text-xs font-mono"
                     />
                   </div>
-                  <div className="sm:col-span-3">
-                    <input
-                      type="text"
-                      required
-                      maxLength={4}
-                      value={cardCvc}
-                      onChange={(e) => setCardCvc(e.target.value.replace(/\D/g, ''))}
-                      placeholder="CVC"
-                      className="w-full px-3 py-2.5 min-h-[40px] bg-white border border-[#2C221E]/20 text-xs font-mono"
-                    />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] uppercase text-[#2C221E]/70 mb-1">Expiry (MM/YY)</label>
+                      <input
+                        type="text"
+                        required
+                        value={cardExpiry}
+                        onChange={(e) => {
+                          const digits = e.target.value.replace(/\D/g, '').slice(0, 4);
+                          setCardExpiry(digits.length >= 3 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits);
+                        }}
+                        placeholder="08/28"
+                        className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#2C221E]/20 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] uppercase text-[#2C221E]/70 mb-1">CVC</label>
+                      <input
+                        type="text"
+                        required
+                        maxLength={4}
+                        value={cardCvc}
+                        onChange={(e) => setCardCvc(e.target.value.replace(/\D/g, ''))}
+                        placeholder="•••"
+                        className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#2C221E]/20 text-xs font-mono"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
-            </div>
 
-            {errorMsg && <p className="text-xs text-[#8C7355]">{errorMsg}</p>}
+              {/* QRIS Inputs with limit check */}
+              {paymentMethod === 'qris' && (
+                <div className="p-4 bg-white border border-[#2C221E]/15 space-y-3 text-xs text-center">
+                  {!isQrisSupported ? (
+                    <div className="p-3 bg-[#8C7355]/10 border border-[#8C7355] text-left space-y-2">
+                      <p className="font-medium text-[#2C221E]">QRIS Transaction Limit Exceeded</p>
+                      <p className="text-[#2C221E]/80 font-light">
+                        QRIS is available for payments up to Rp 10,000,000. Total is Rp {totalAmountIdr.toLocaleString()}. Please use Card or Bank Transfer.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod('card')}
+                        className="px-3 py-1.5 bg-[#2C221E] text-white text-[10px] uppercase"
+                      >
+                        Switch to Card
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <QrCode className="w-32 h-32 text-[#2C221E] mx-auto" />
+                      <p className="font-mono text-xs font-semibold">
+                        Rp {totalAmountIdr.toLocaleString()} IDR
+                      </p>
+                      <p className="text-[11px] text-[#2C221E]/70">
+                        Scan with BCA, Mandiri, GoPay, OVO, or DANA
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setStep('dates')}
-                className="w-full sm:w-auto px-6 py-3.5 border border-[#2C221E]/25 text-xs uppercase tracking-[0.2em]"
-              >
-                Back to Dates
-              </button>
+              {/* Virtual Account */}
+              {paymentMethod === 'virtual_account' && (
+                <div className="p-4 bg-white border border-[#2C221E]/15 space-y-3 text-xs">
+                  <div className="grid grid-cols-4 gap-1">
+                    {['bca', 'mandiri', 'bni', 'bri'].map((b) => (
+                      <button
+                        key={b}
+                        type="button"
+                        onClick={() => setSelectedVaBank(b)}
+                        className={`p-2 border text-center uppercase font-medium ${
+                          selectedVaBank === b ? 'bg-[#2C221E] text-white' : 'bg-white'
+                        }`}
+                      >
+                        {b}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="p-3 bg-[#FAF8F5] border border-[#2C221E]/10 space-y-1 font-mono text-xs">
+                    <span className="block text-[10px] uppercase text-[#8C7355]">Virtual Account Number</span>
+                    <span className="font-semibold text-sm">7720-4918-2940-11</span>
+                    <p className="text-[11px] font-sans text-[#2C221E]/70">PT VILLA TAO BALIAN RETREAT</p>
+                  </div>
+                </div>
+              )}
+
+              {paymentError && (
+                <div className="p-3 bg-[#8C7355]/10 border border-[#8C7355] text-xs text-[#2C221E]">
+                  {paymentError}
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={isProcessing}
-                className="w-full sm:flex-1 py-3.5 bg-[#2C221E] text-[#FAF8F5] hover:bg-[#3E342B] text-xs uppercase tracking-[0.22em] transition-colors"
+                disabled={isProcessing || (paymentMethod === 'qris' && !isQrisSupported)}
+                className="w-full py-3.5 bg-[#2C221E] text-[#FAF8F5] text-xs uppercase tracking-[0.22em] font-medium hover:bg-[#3E342B] transition-colors flex items-center justify-center space-x-2 disabled:opacity-50"
               >
-                {isProcessing
-                  ? 'CONFIRMING RESERVATION...'
-                  : `RESERVE THE ENTIRE VILLA • ${formatPrice(amountDueNowUsd)}`}
+                <Lock className="w-3.5 h-3.5 text-[#C5A880]" />
+                <span>
+                  {isProcessing ? 'VERIFYING...' : `PAY NOW • ${formatPrice(priceBreakdown.totalDirectUsd)}`}
+                </span>
               </button>
+            </form>
+          )}
+
+          {/* STEP 5: CONFIRMED */}
+          {modalStep === 'confirmed' && confirmedRes && (
+            <div className="space-y-5 max-w-2xl mx-auto animate-in fade-in text-center sm:text-left">
+              <div className="p-5 bg-[#F5F2EB] border border-[#2C221E]/15 space-y-3">
+                <span className="text-[10px] uppercase tracking-[0.24em] text-[#8C7355] block font-medium">
+                  RESERVATION CONFIRMED
+                </span>
+                <h4 className="font-serif text-2xl text-[#2C221E]">
+                  Villa Tao — Entire Private Villa
+                </h4>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs border-t border-[#2C221E]/10 pt-3">
+                  <div>
+                    <span className="text-[#2C221E]/60 block text-[10px] uppercase">Reference</span>
+                    <span className="font-mono font-semibold">{confirmedRes.referenceCode}</span>
+                  </div>
+                  <div>
+                    <span className="text-[#2C221E]/60 block text-[10px] uppercase">Dates</span>
+                    <span>{confirmedRes.checkIn} → {confirmedRes.checkOut}</span>
+                  </div>
+                  <div>
+                    <span className="text-[#2C221E]/60 block text-[10px] uppercase">Payment</span>
+                    <span className="text-[#25D366] font-semibold">PAID &amp; CONFIRMED</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <a
+                  href={getWhatsAppUrl(
+                    'booking',
+                    `Hello Villa Tao, my confirmed booking reference is ${confirmedRes.referenceCode}.`
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 py-3 bg-[#2C221E] text-[#FAF8F5] text-xs uppercase tracking-[0.2em] inline-flex items-center justify-center space-x-2"
+                >
+                  <MessageCircle className="w-4 h-4 text-[#25D366]" />
+                  <span>Connect with WhatsApp Concierge</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-6 py-3 border border-[#2C221E]/20 text-xs uppercase tracking-wider"
+                >
+                  Done
+                </button>
+              </div>
             </div>
-          </form>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

@@ -35,9 +35,11 @@ export interface RoomDetail {
 
 export type BookingChannel = 'direct' | 'airbnb' | 'booking_com' | 'whatsapp' | 'owner_block';
 
-export type BookingStatus = 'confirmed' | 'deposit_paid' | 'pending' | 'cancelled';
+export type BookingStatus = 'held' | 'confirmed' | 'deposit_paid' | 'pending' | 'cancelled' | 'expired';
 
-export type PaymentMethod = 'card' | 'bank_transfer' | 'whatsapp_concierge' | 'ota_prepaid';
+export type PaymentMethod = 'card' | 'qris' | 'virtual_account' | 'bank_transfer' | 'whatsapp_concierge' | 'ota_prepaid';
+
+export const QRIS_MAX_LIMIT_IDR = 10_000_000; // Rp 10,000,000 max transaction limit for QRIS
 
 export type CurrencyCode = 'USD' | 'IDR' | 'EUR' | 'AUD';
 
@@ -99,6 +101,8 @@ export interface Reservation {
   specialRequests?: string;
   createdAt: string;
   externalUid?: string;
+  heldExpiresAt?: number;
+  paymentId?: string;
 }
 
 export interface ChannelConnection {
