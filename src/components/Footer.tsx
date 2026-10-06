@@ -1,8 +1,13 @@
 import React from 'react';
-import { MessageCircle, MapPin, Mail, ArrowUpRight, ArrowUp } from 'lucide-react';
+import { MessageCircle, MapPin, ArrowUpRight, ArrowUp, Lock, Search } from 'lucide-react';
 import { villaTaoLinks, officialWhatsAppNumber } from '../data/villaData';
 
-export const Footer: React.FC = () => {
+interface FooterProps {
+  onOpenManageBooking?: () => void;
+  onOpenAdmin?: () => void;
+}
+
+export const Footer: React.FC<FooterProps> = ({ onOpenManageBooking, onOpenAdmin }) => {
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -149,11 +154,37 @@ export const Footer: React.FC = () => {
         </div>
 
         {/* Bottom Bar */}
-        <div className="pt-8 flex flex-col sm:flex-row items-center justify-between text-xs text-white/50 font-light gap-4 text-center sm:text-left">
+        <div className="pt-8 flex flex-col md:flex-row items-center justify-between text-xs text-white/50 font-light gap-4 text-center md:text-left">
           <p>© {new Date().getFullYear()} Villa Tao Balian. All Rights Reserved.</p>
-          <p className="tracking-widest uppercase text-[10px] text-white/40">
-            Luxury Tropical • Traditional Architecture • Nature & Privacy
-          </p>
+
+          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
+            {onOpenManageBooking && (
+              <button
+                type="button"
+                onClick={onOpenManageBooking}
+                className="inline-flex items-center space-x-1.5 text-[10px] uppercase tracking-[0.2em] text-white/60 hover:text-[#C5A880] transition-colors py-1"
+              >
+                <Search className="w-3 h-3 text-[#C5A880]" />
+                <span>Manage My Booking</span>
+              </button>
+            )}
+
+            {onOpenAdmin && (
+              <button
+                id="footer-admin-portal-btn"
+                type="button"
+                onClick={onOpenAdmin}
+                className="inline-flex items-center space-x-1.5 text-[10px] uppercase tracking-[0.2em] text-white/60 hover:text-[#C5A880] transition-colors py-1"
+              >
+                <Lock className="w-3 h-3 text-[#C5A880]" />
+                <span>Owner &amp; Admin Portal</span>
+              </button>
+            )}
+
+            <span className="tracking-widest uppercase text-[10px] text-white/35 hidden sm:inline">
+              Luxury Tropical • West Bali
+            </span>
+          </div>
         </div>
       </div>
     </footer>

@@ -53,70 +53,33 @@ export const Facilities: React.FC = () => {
           </p>
         </div>
 
-        {/* Featured Visual Spaces Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6 mb-8 sm:mb-12">
-          {visualFacilities.slice(0, 4).map((item) => (
+        {/* Visual Spaces Grid — 4 columns desktop, 2 tablet, 1 mobile, aligned rows on tablet/desktop & natural heights on mobile */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6 items-stretch mb-12 sm:mb-16">
+          {visualFacilities.map((item) => (
             <div
               key={item.id}
-              className="group relative bg-[#FAF8F5] border border-[#2C221E]/10 overflow-hidden shadow-xs hover:shadow-xl transition-all duration-300"
+              className="group relative h-full flex flex-col bg-[#FAF8F5] border border-[#2C221E]/10 overflow-hidden shadow-xs hover:shadow-xl transition-shadow duration-300"
             >
-              <div className="relative aspect-[4/3] overflow-hidden bg-[#EAE4D6]">
+              <div className="relative w-full sm:aspect-[3/2] overflow-hidden shrink-0 bg-[#EAE4D6]">
                 {item.image && (
                   <img
                     src={item.image}
                     alt={`${item.name} at Villa Tao Balian`}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out"
+                    className="w-full h-auto sm:h-full block sm:object-cover sm:object-center"
                     referrerPolicy="no-referrer"
                     loading="lazy"
                   />
                 )}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-70" />
-                <div className="absolute bottom-3 left-4 text-white">
-                  <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center mb-1 text-[#C5A880]">
+                <div className="absolute inset-x-0 bottom-0 pt-12 pb-3.5 px-4 bg-gradient-to-t from-black/70 via-black/25 to-transparent text-white pointer-events-none">
+                  <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center mb-1.5 text-[#C5A880]">
                     {iconMap[item.iconName] || <Sparkles className="w-4 h-4" />}
                   </div>
-                  <h3 className="font-serif text-lg font-normal text-white">
+                  <h3 className="font-serif text-lg font-normal text-white leading-snug">
                     {item.name}
                   </h3>
                 </div>
               </div>
-              <div className="p-4 sm:p-5">
-                <p className="text-xs text-[#2C221E]/75 font-light leading-relaxed">
-                  {item.description}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Secondary Visual Spaces Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6 mb-12 sm:mb-16">
-          {visualFacilities.slice(4, 8).map((item) => (
-            <div
-              key={item.id}
-              className="group relative bg-[#FAF8F5] border border-[#2C221E]/10 overflow-hidden shadow-xs hover:shadow-xl transition-all duration-300"
-            >
-              <div className="relative aspect-[4/3] overflow-hidden bg-[#EAE4D6]">
-                {item.image && (
-                  <img
-                    src={item.image}
-                    alt={`${item.name} at Villa Tao Balian`}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out"
-                    referrerPolicy="no-referrer"
-                    loading="lazy"
-                  />
-                )}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-70" />
-                <div className="absolute bottom-3 left-4 text-white">
-                  <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center mb-1 text-[#C5A880]">
-                    {iconMap[item.iconName] || <Sparkles className="w-4 h-4" />}
-                  </div>
-                  <h3 className="font-serif text-lg font-normal text-white">
-                    {item.name}
-                  </h3>
-                </div>
-              </div>
-              <div className="p-4 sm:p-5">
+              <div className="p-4 sm:p-5 flex-1 flex items-start sm:min-h-[80px] bg-[#FAF8F5]">
                 <p className="text-xs text-[#2C221E]/75 font-light leading-relaxed">
                   {item.description}
                 </p>

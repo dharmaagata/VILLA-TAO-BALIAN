@@ -51,10 +51,11 @@ h1, h2, h3, h4, .font-serif {
 }
 
 /* Subtle smooth image transitions & responsive media constraints */
-img {
-  content-visibility: auto;
-  max-width: 100%;
-  height: auto;
+@layer base {
+  img {
+    max-width: 100%;
+    height: auto;
+  }
 }
 
 /* Touch target helper */

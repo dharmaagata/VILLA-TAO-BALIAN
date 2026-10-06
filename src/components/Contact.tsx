@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { Mail, MessageCircle, MapPin, Send, CheckCircle2, Phone, Calendar, ArrowUpRight } from 'lucide-react';
 import { villaTaoLinks, officialWhatsAppNumber, getWhatsAppUrl } from '../data/villaData';
 import { ContactFormData } from '../types';
+import { useBooking } from '../context/BookingContext';
 
 export const Contact: React.FC = () => {
+  const { addGuestInquiry } = useBooking();
   const [formData, setFormData] = useState<ContactFormData>({
     fullName: '',
     email: '',
@@ -27,6 +29,7 @@ export const Contact: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    addGuestInquiry(formData);
 
     // Simulate clean dispatch with polite response as specified in prompt
     setTimeout(() => {

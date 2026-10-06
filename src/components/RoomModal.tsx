@@ -136,6 +136,16 @@ export const RoomModal: React.FC<RoomModalProps> = ({ room, onClose, onOpenBooki
             </div>
           </div>
 
+          {/* Exclusive Estate Inclusions Notice */}
+          <div className="p-4 bg-[#F5F2EB] border border-[#2C221E]/12 text-xs text-[#2C221E]/80">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-[#8C7355] font-medium block mb-1">
+              EXCLUSIVE PRIVATE VILLA INCLUSION
+            </span>
+            <p className="font-light leading-relaxed">
+              This suite is reserved exclusively as part of Villa Tao's entire private 4-bedroom oceanfront estate. All four sanctuary suites, private pool, and staff are exclusively yours during your stay.
+            </p>
+          </div>
+
           {/* Actions */}
           <div className="pt-6 border-t border-[#2C221E]/10 flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4">
             <a
@@ -155,7 +165,7 @@ export const RoomModal: React.FC<RoomModalProps> = ({ room, onClose, onOpenBooki
               }}
               className="w-full sm:w-auto px-6 py-3.5 min-h-[44px] bg-[#2C221E] text-white text-xs uppercase tracking-[0.2em] font-medium hover:bg-[#4A3B2C] transition-colors text-center"
             >
-              Booking Options
+              BOOK THE ENTIRE VILLA
             </button>
           </div>
         </div>

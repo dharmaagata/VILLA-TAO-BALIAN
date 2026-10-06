@@ -18,13 +18,13 @@ export const Rooms: React.FC<RoomsProps> = ({ onOpenBooking }) => {
         <div className="max-w-3xl mb-12 sm:mb-20">
           <div className="inline-flex items-center space-x-2 text-[#8C7355] text-xs uppercase tracking-[0.3em] font-medium mb-3">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>ACCOMMODATIONS</span>
+            <span>EXCLUSIVE ESTATE • 4 BEDROOM SUITES</span>
           </div>
           <h2 className="font-serif text-3xl sm:text-4xl md:text-5xl font-normal text-[#2C221E] tracking-tight">
-            Stay Your Way
+            The Four Suites of Villa Tao
           </h2>
           <p className="mt-4 text-sm sm:text-base md:text-lg text-[#2C221E]/75 font-light leading-relaxed max-w-2xl">
-            Each bedroom suite at Villa Tao is crafted as an intimate, breezy sanctuary featuring authentic Indonesian architectural craftsmanship, tactile natural materials, and restorative privacy.
+            Villa Tao is booked exclusively as one private oceanfront estate. When you reserve your stay, all four architectural suites, private infinity lap pool, and panoramic ocean terraces belong entirely to you and your party.
           </p>
         </div>
 
@@ -46,9 +46,14 @@ export const Rooms: React.FC<RoomsProps> = ({ onOpenBooking }) => {
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-80" />
                 
-                {/* Code Badge */}
-                <div className="absolute top-4 left-4 bg-white/90 backdrop-blur-xs px-3 py-1 text-[10px] sm:text-[11px] uppercase tracking-[0.25em] font-semibold text-[#2C221E]">
-                  {room.code}
+                {/* Code Badge & Inclusion Tag */}
+                <div className="absolute top-4 left-4 right-4 flex items-center justify-between gap-2">
+                  <div className="bg-white/90 backdrop-blur-xs px-3 py-1 text-[10px] sm:text-[11px] uppercase tracking-[0.25em] font-semibold text-[#2C221E]">
+                    {room.code}
+                  </div>
+                  <div className="bg-[#2C221E]/90 backdrop-blur-xs px-3 py-1 text-[10px] sm:text-[11px] uppercase tracking-[0.18em] text-[#FAF8F5]">
+                    INCLUDED IN ENTIRE VILLA STAY
+                  </div>
                 </div>
 
                 <div className="absolute bottom-4 left-5 sm:left-6 right-5 sm:right-6 text-white">
@@ -86,15 +91,15 @@ export const Rooms: React.FC<RoomsProps> = ({ onOpenBooking }) => {
                     onClick={() => setSelectedRoom(room)}
                     className="inline-flex items-center space-x-2 text-xs uppercase tracking-[0.2em] text-[#2C221E] font-medium hover:text-[#8C7355] transition-colors py-2 group/btn min-h-[44px]"
                   >
-                    <span>VIEW ROOM DETAILS</span>
+                    <span>VIEW SUITE DETAILS</span>
                     <ArrowRight className="w-3.5 h-3.5 group-hover/btn:translate-x-1 transition-transform" />
                   </button>
 
                   <button
-                    onClick={onOpenBooking}
+                    onClick={() => onOpenBooking()}
                     className="w-full sm:w-auto text-[11px] uppercase tracking-[0.2em] px-5 py-2.5 min-h-[44px] bg-[#2C221E] text-[#FAF8F5] hover:bg-[#4A3B2C] transition-colors font-medium flex items-center justify-center text-center"
                   >
-                    BOOK STAY
+                    BOOK THE ENTIRE VILLA
                   </button>
                 </div>
               </div>

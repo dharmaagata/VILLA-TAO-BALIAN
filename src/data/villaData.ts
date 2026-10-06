@@ -118,16 +118,45 @@ export const storyCards = [
 ];
 
 /**
- * 12. ROOMS SECTION DATA
- * Uses specified temporary editable room labels, strictly respecting Content Accuracy Rule.
+ * 12. ROOMS SECTION DATA — INFORMATIONAL SUITE CONTENT
+ * The four bedrooms are included in every Villa Tao booking. Guests always reserve the entire villa.
  */
+export const entireVillaUnit: RoomDetail = {
+  id: "entire-villa",
+  code: "VILLA TAO",
+  name: "Villa Tao — Entire Private Villa",
+  shortDescription: "Private tropical oceanfront sanctuary exclusively yours. Includes all 4 bedroom suites, private infinity lap pool, sunken living pavilion, ironwood ocean decks, and dedicated caretaking staff.",
+  fullDescription: "Reserve the entirety of Villa Tao Balian as your exclusive private coastal estate. Accommodating up to 10 guests across all four architectural bedrooms, exclusive reservation includes sole private enjoyment of the infinity lap pool, sunken living lounge, ironwood sun decks, rooftop lawn, open-air ocean massage pavilion, lush tropical gardens, and dedicated daily housekeeping and caretaking team.",
+  image: "/images/villa-tao/photo-01.jpg",
+  additionalImages: [
+    "/images/villa-tao/photo-43.jpg",
+    "/images/villa-tao/photo-34.jpg",
+    "/images/villa-tao/photo-03.jpg",
+    "/images/villa-tao/photo-22.jpg"
+  ],
+  capacity: "Maximum 10 Guests (4 Bedrooms Included)",
+  maxGuests: 10,
+  baseNightlyRate: 580,
+  bedType: "4 Private Suites (3 King Beds, 1 Double, 2 Twins, 1 Daybed)",
+  bathroom: "4 Private En-Suite Stone & Soaking Bathrooms",
+  view: "Panoramic Ocean, Infinity Pool & Tropical Coconut Grove",
+  features: [
+    "100% Exclusive Private Property Use",
+    "All 4 Architectural Bedrooms Included",
+    "Private Infinity Lap Swimming Pool",
+    "Direct Beach & Ocean Panorama",
+    "Dedicated Villa Concierge & Daily Housekeeping",
+    "Sunken Open-Air Living Pavilion & Ocean Decks"
+  ]
+};
+
 export const roomsData: RoomDetail[] = [
   {
     id: "room-01",
     code: "ROOM 01",
     name: "Master Ocean Joglo Suite",
     shortDescription: "An expansive master joglo sanctuary with vaulted cathedral timber rafters, romantic four-poster canopy bed with flowing mosquito net, and ocean view terrace.",
-    fullDescription: "Characterized by its majestic exposed timber roof structure and handcrafted wooden floors, this suite combines traditional Indonesian grandeur with intimate privacy. Features a handcrafted king-size bed with flowing white canopy netting, plush cowhide rug, custom wicker lounge chairs, and direct ocean breezes.",
+    fullDescription: "Characterized by its majestic exposed timber roof structure and handcrafted wooden floors, this suite combines traditional Indonesian grandeur with intimate privacy. Features a handcrafted king-size bed with flowing white canopy netting, plush cowhide rug, custom wicker lounge chairs, and direct ocean breezes. Included in your entire villa stay.",
     image: "/images/villa-tao/photo-06.jpg",
     additionalImages: [
       "/images/villa-tao/photo-05.jpg",
@@ -135,7 +164,7 @@ export const roomsData: RoomDetail[] = [
       "/images/villa-tao/photo-10.jpg",
       "/images/villa-tao/photo-11.jpg"
     ],
-    capacity: "2 Guests",
+    capacity: "2 Guests (Included in Villa)",
     bedType: "1 King Bed with Netting Canopy",
     bathroom: "En-suite Sunken Stone Bathtub & Rainforest Shower",
     view: "Ocean & Garden View",
@@ -146,7 +175,7 @@ export const roomsData: RoomDetail[] = [
     code: "ROOM 02",
     name: "Ground Floor Veranda Suite",
     shortDescription: "A serene, spacious room nestled next to tropical foliage with polished concrete walls, canopy bed, additional daybed, and private shaded terrace.",
-    fullDescription: "Designed with a contemporary tropical aesthetic, this room features textured concrete walls, daybed lounge alcove, and wide sliding glass doors that open directly onto a covered wooden terrace and tropical garden. Natural passive cooling and ceiling fans keep the space breezy and restful.",
+    fullDescription: "Designed with a contemporary tropical aesthetic, this room features textured concrete walls, daybed lounge alcove, and wide sliding glass doors that open directly onto a covered wooden terrace and tropical garden. Natural passive cooling and ceiling fans keep the space breezy and restful. Included in your entire villa stay.",
     image: "/images/villa-tao/photo-12.jpg",
     additionalImages: [
       "/images/villa-tao/photo-13.jpg",
@@ -154,7 +183,7 @@ export const roomsData: RoomDetail[] = [
       "/images/villa-tao/photo-14.jpg",
       "/images/villa-tao/photo-17.jpg"
     ],
-    capacity: "2-3 Guests",
+    capacity: "2-3 Guests (Included in Villa)",
     bedType: "1 King Canopy Bed + 1 Daybed",
     bathroom: "Polished Concrete Bathroom with River Stone Sink",
     view: "Tropical Garden & Terrace View",
@@ -165,7 +194,7 @@ export const roomsData: RoomDetail[] = [
     code: "ROOM 03",
     name: "Garden Multi-Bed Suite",
     shortDescription: "A versatile, airy family suite configured with a double bed plus two single twin beds, polished concrete aesthetics, and private en-suite bathroom.",
-    fullDescription: "Generously proportioned to accommodate families or groups of friends, this suite features a flexible multi-bed layout set within cool polished concrete interiors. Broad garden windows bring in soft filtered light, while a private en-suite bathroom with rustic timber counter and rain shower provides complete comfort.",
+    fullDescription: "Generously proportioned to accommodate families or groups of friends, this suite features a flexible multi-bed layout set within cool polished concrete interiors. Broad garden windows bring in soft filtered light, while a private en-suite bathroom with rustic timber counter and rain shower provides complete comfort. Included in your entire villa stay.",
     image: "/images/villa-tao/photo-15.jpg",
     additionalImages: [
       "/images/villa-tao/photo-18.jpg",
@@ -173,7 +202,7 @@ export const roomsData: RoomDetail[] = [
       "/images/villa-tao/photo-17.jpg",
       "/images/villa-tao/photo-16.jpg"
     ],
-    capacity: "Up to 4 Guests",
+    capacity: "Up to 4 Guests (Included in Villa)",
     bedType: "1 Double Bed + 2 Twin Single Beds",
     bathroom: "En-suite Concrete Bathroom with Rain Shower & Brass Basin",
     view: "Lush Tropical Garden Outlook",
@@ -184,7 +213,7 @@ export const roomsData: RoomDetail[] = [
     code: "ROOM 04",
     name: "Upper Teak Ocean Suite",
     shortDescription: "A timber-rich retreat perched on the upper level, offering sweeping coastal panoramas, natural cross-ventilation, and warm woodwork.",
-    fullDescription: "Perched above the grounds with expansive vistas toward the Indian Ocean surf, this suite celebrates traditional Indonesian woodworking with polished timber floors, curved wicker loungers, and wide double doors opening out to coastal breezes and an elevated ocean-view balcony.",
+    fullDescription: "Perched above the grounds with expansive vistas toward the Indian Ocean surf, this suite celebrates traditional Indonesian woodworking with polished timber floors, curved wicker loungers, and wide double doors opening out to coastal breezes and an elevated ocean-view balcony. Included in your entire villa stay.",
     image: "/images/villa-tao/photo-08.jpg",
     additionalImages: [
       "/images/villa-tao/photo-09.jpg",
@@ -192,11 +221,40 @@ export const roomsData: RoomDetail[] = [
       "/images/villa-tao/photo-07.jpg",
       "/images/villa-tao/photo-41.jpg"
     ],
-    capacity: "2 Guests",
+    capacity: "2 Guests (Included in Villa)",
     bedType: "1 King Bed with Ocean Outlook",
     bathroom: "Deep Soaking Bathtub with Wide Window Vista",
     view: "Panoramic Ocean & Coconut Palm View",
     features: ["Elevated Ocean Vista", "Private Teak Balcony", "Curved Wicker Loungers", "Deep Soaking Tub", "High Ceiling Architecture"]
+  }
+];
+
+export const allBookableUnits: RoomDetail[] = [entireVillaUnit];
+
+export const bookingAddons = [
+  {
+    id: "airport-transfer",
+    name: "Private Coastal Airport Transfer (DPS)",
+    description: "Chauffeured private SUV pickup from Ngurah Rai International Airport directly to Villa Tao Balian with cold towels & refreshments.",
+    priceUsd: 45,
+    perNight: false,
+    perGuest: false
+  },
+  {
+    id: "ocean-massage",
+    name: "Open-Air Pavilion Balinese Massage (Couple)",
+    description: "90-minute traditional Balinese botanical oil massage for two on the sea-view wooden treatment deck.",
+    priceUsd: 65,
+    perNight: false,
+    perGuest: false
+  },
+  {
+    id: "daily-breakfast",
+    name: "Daily Slow-Morning Tropical Breakfast",
+    description: "Freshly prepared tropical fruits, Balinese highlands coffee, artisan eggs & pastries served on your terrace each morning.",
+    priceUsd: 16,
+    perNight: true,
+    perGuest: true
   }
 ];
 
